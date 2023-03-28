@@ -197,24 +197,9 @@ class LightSource:
     def __init__(self, pos: Vector2) -> None:
         self.pos = pos
 
-    def line_of_sight_polygon(
-        self,
-        width: int,
-        height: int,
-        obstacles: list[Obstacle],
-    ) -> list[Vector2]:
-        topleft = Vector2(0, 0)
-        topright = Vector2(width, 0)
-        botleft = Vector2(0, height)
-        botright = Vector2(width, height)
-        sides = [
-            Obstacle(botleft, topleft),
-            Obstacle(topleft, topright),
-            Obstacle(topright, botright),
-            Obstacle(botright, botleft),
-        ]
+    def line_of_sight_polygon(self, obstacles: list[Obstacle]) -> list[Vector2]:
         ends: list[Vector2] = []
-        for obs in sides + obstacles:
+        for obs in obstacles:
             ends.append(obs.start_pos - self.pos)
             ends.append(obs.end_pos - self.pos)
         ends.sort(key=lambda v: v.as_polar()[1])
@@ -225,12 +210,12 @@ class LightSource:
             nearest_obs = None
             intersect_ends = []
             # initial min_dist should be longer than any possible distance within the window
-            min_dist = (width + height) / ray.length()
-            for line in sides + obstacles:
+            min_dist = 4500 / ray.length()
+            for line in obstacles:
                 t1t2 = intersect_ray_line(self.pos, ray, line.start_pos, line.end_pos)
                 if t1t2 is not None:
                     t1, t2 = t1t2
-                    if t2 == 0 or t2 == 1:
+                    if t2 in (0, 1):
                         intersect_ends.append((line, t1))
                     elif t1 < min_dist:
                         nearest_obs = line
@@ -284,13 +269,12 @@ class GameScene(Scene):
 
         self.player.render(screen)
 
+        obstacles = self.obstacles + get_sides(screen_width, screen_height)
         for light in self.lights:
             lighting = pygame.Surface((screen_width, screen_height))
             lighting.set_alpha(40)
             light.render(screen)
-            poly = light.line_of_sight_polygon(
-                screen_width, screen_height, self.obstacles,
-            )
+            poly = light.line_of_sight_polygon(obstacles)
             pygame.draw.polygon(lighting, (255, 255, 150), poly)
             screen.blit(lighting, (0, 0))
 
@@ -368,6 +352,19 @@ def intersect_ray_line(
         return t1, t2
 
     return None
+
+
+def get_sides(width: int, height: int) -> list[Obstacle]:
+    topleft = Vector2(0, 0)
+    topright = Vector2(width, 0)
+    botleft = Vector2(0, height)
+    botright = Vector2(width, height)
+    return [
+        Obstacle(botleft, topleft),
+        Obstacle(topleft, topright),
+        Obstacle(topright, botright),
+        Obstacle(botright, botleft),
+    ]
 
 
 def reset_cursor() -> None:
