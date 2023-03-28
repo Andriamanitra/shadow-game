@@ -220,12 +220,13 @@ class LightSource:
         ends.sort(key=lambda v: v.as_polar()[1])
         poly = []
         on_obstacle = None
+        first_obstacle = None
         for ray in ends:
             nearest_obs = None
             intersect_ends = []
             # initial min_dist should be longer than any possible distance within the window
             min_dist = (width + height) / ray.length()
-            for line in obstacles:
+            for line in sides + obstacles:
                 t1t2 = intersect_ray_line(self.pos, ray, line.start_pos, line.end_pos)
                 if t1t2 is not None:
                     t1, t2 = t1t2
@@ -234,23 +235,30 @@ class LightSource:
                     elif t1 < min_dist:
                         nearest_obs = line
                         min_dist = t1
-            shorters = [
-                (iobs, self.pos + ray * t1)
-                for iobs, t1 in intersect_ends if t1 < min_dist
-            ]
-            for iobs, vec in shorters:
-                if iobs is on_obstacle or ray == ends[0]:
-                    poly.append(vec)
-            poly.append(self.pos + ray * min_dist)
-            for iobs, vec in shorters:
-                if iobs is not on_obstacle:
-                    poly.append(vec)
-                    nearest_obs = iobs
+
+            closest_obs_end = None
+            closest_dist = min_dist
+            for iobs, t1 in intersect_ends:
+                if t1 < closest_dist:
+                    closest_obs_end = iobs
+                    closest_dist = t1
+
+            if closest_obs_end is None:
+                poly.append(self.pos + ray * min_dist)
+            elif closest_obs_end is on_obstacle:
+                poly.append(self.pos + ray * closest_dist)
+                poly.append(self.pos + ray * min_dist)
+            else:
+                poly.append(self.pos + ray * min_dist)
+                poly.append(self.pos + ray * closest_dist)
+                nearest_obs = closest_obs_end
+
             on_obstacle = nearest_obs
 
-        # dirty hack to fix this: https://i.imgur.com/25J1eEa.png
-        if poly[0] == poly[2]:
-            return poly[2:]
+            if first_obstacle is None:
+                first_obstacle = on_obstacle
+        if on_obstacle == first_obstacle:
+            poly[0:2] = poly[1::-1]
 
         return poly
 
