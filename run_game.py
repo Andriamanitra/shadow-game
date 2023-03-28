@@ -31,6 +31,7 @@ class Game:
                 if event.type == pygame.USEREVENT:
                     if event.user_event == UserEvent.NEW_GAME:
                         self.scenes["game"] = GameScene()
+                        reset_cursor()
                         self.scene = self.scenes["game"]
                     if event.user_event == UserEvent.SCENE_CHANGE:
                         screen.fill((0, 0, 0))
@@ -202,36 +203,55 @@ class LightSource:
         height: int,
         obstacles: list[Obstacle],
     ) -> list[Vector2]:
-        rays = [
-            (Vector2(0, 0) - self.pos).normalize(),
-            (Vector2(width, 0) - self.pos).normalize(),
-            (Vector2(0, height) - self.pos).normalize(),
-            (Vector2(width, height) - self.pos).normalize(),
+        topleft = Vector2(0, 0)
+        topright = Vector2(width, 0)
+        botleft = Vector2(0, height)
+        botright = Vector2(width, height)
+        sides = [
+            Obstacle(botleft, topleft),
+            Obstacle(topleft, topright),
+            Obstacle(topright, botright),
+            Obstacle(botright, botleft),
         ]
-        for obs in obstacles:
-            rays.append((obs.start_pos - self.pos).normalize())
-            rays.append((obs.end_pos - self.pos).normalize())
-        rays.sort(key=lambda v: v.as_polar()[1])
+        ends: list[Vector2] = []
+        for obs in sides + obstacles:
+            ends.append(obs.start_pos - self.pos)
+            ends.append(obs.end_pos - self.pos)
+        ends.sort(key=lambda v: v.as_polar()[1])
         poly = []
-        for ray in rays:
-            min_dist = 9001.0
-            intersect_pre = None
-            intersect_after = None
+        on_obstacle = None
+        for ray in ends:
+            nearest_obs = None
+            intersect_ends = []
+            # initial min_dist should be longer than any possible distance within the window
+            min_dist = (width + height) / ray.length()
             for line in obstacles:
                 t1t2 = intersect_ray_line(self.pos, ray, line.start_pos, line.end_pos)
                 if t1t2 is not None:
                     t1, t2 = t1t2
-                    if t2 == 0:
-                        intersect_pre = t1
-                    elif t2 == 1:
-                        intersect_after = t1
+                    if t2 == 0 or t2 == 1:
+                        intersect_ends.append((line, t1))
                     elif t1 < min_dist:
+                        nearest_obs = line
                         min_dist = t1
-            if intersect_pre is not None and intersect_pre < min_dist:
-                poly.append(self.pos + ray * intersect_pre)
+            shorters = [
+                (iobs, self.pos + ray * t1)
+                for iobs, t1 in intersect_ends if t1 < min_dist
+            ]
+            for iobs, vec in shorters:
+                if iobs is on_obstacle or ray == ends[0]:
+                    poly.append(vec)
             poly.append(self.pos + ray * min_dist)
-            if intersect_after is not None and intersect_after < min_dist:
-                poly.append(self.pos + ray * intersect_after)
+            for iobs, vec in shorters:
+                if iobs is not on_obstacle:
+                    poly.append(vec)
+                    nearest_obs = iobs
+            on_obstacle = nearest_obs
+
+        # dirty hack to fix this: https://i.imgur.com/25J1eEa.png
+        if poly[0] == poly[2]:
+            return poly[2:]
+
         return poly
 
     def render(self, screen: pygame.Surface) -> None:
@@ -243,11 +263,11 @@ class GameScene(Scene):
         self.player = Player(Vector2(20, 500))
         self.lights: list[LightSource] = [
             LightSource(Vector2(400, 100)),
-            LightSource(Vector2(700, 150)),
         ]
         self.obstacles: list[Obstacle] = [
             Obstacle(Vector2(10, 550), Vector2(600, 550)),
             Obstacle(Vector2(300, 200), Vector2(400, 400)),
+            Obstacle(Vector2(500, 200), Vector2(600, 100)),
         ]
 
     def render(self, screen: pygame.Surface) -> None:
@@ -261,13 +281,25 @@ class GameScene(Scene):
             lighting.set_alpha(40)
             light.render(screen)
             poly = light.line_of_sight_polygon(
-                screen_width, screen_height, self.obstacles
+                screen_width, screen_height, self.obstacles,
             )
             pygame.draw.polygon(lighting, (255, 255, 150), poly)
             screen.blit(lighting, (0, 0))
 
+        ends = [
+            Vector2(0, 0),
+            Vector2(screen_width, 0),
+            Vector2(0, screen_height),
+            Vector2(screen_width, screen_height),
+        ]
+
         for obstacle in self.obstacles:
             obstacle.render(screen)
+            ends.append(obstacle.start_pos)
+            ends.append(obstacle.end_pos)
+
+        for end in ends:
+            pygame.draw.line(screen, (0, 255, 255), light.pos, end)
 
     def update(self) -> None:
         keys = pygame.key.get_pressed()
@@ -282,6 +314,16 @@ class GameScene(Scene):
             movement.y += 1
         if movement.length() > 0:
             self.player.move(movement)
+        light_movement = Vector2()
+        if keys[pygame.K_a]:
+            light_movement.x -= 1
+        if keys[pygame.K_d]:
+            light_movement.x += 1
+        if keys[pygame.K_w]:
+            light_movement.y -= 1
+        if keys[pygame.K_s]:
+            light_movement.y += 1
+        self.lights[0].pos += light_movement
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
