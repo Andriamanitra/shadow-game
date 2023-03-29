@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from pathlib import Path
 from typing import NoReturn
 
@@ -166,42 +167,63 @@ class MainMenu(Scene):
                         button.clicked()
 
 
-class Player:
-    def __init__(self, pos: Vector2) -> None:
-        self.pos = pos
-        self.color = (255, 0, 0)
-        self.speed = 1.75
-
-    def move(self, direction: Vector2) -> None:
-        direction.scale_to_length(self.speed)
-        self.pos += direction
-
-    def render(self, screen: pygame.Surface) -> None:
-        pygame.draw.circle(screen, self.color, self.pos, 10, 5)
-
-
 class Obstacle:
-    color = (255, 0, 255)
+    width = 3
+    color = (255, 255, 255)
 
     def __init__(self, start_pos: Vector2, end_pos: Vector2) -> None:
         self.start_pos = start_pos
         self.end_pos = end_pos
 
     def render(self, screen: pygame.Surface) -> None:
-        pygame.draw.line(screen, self.color, self.start_pos, self.end_pos, width=3)
+        pygame.draw.line(
+            screen, self.color, self.start_pos, self.end_pos, width=self.width
+        )
 
 
-class LightSource:
+class Movable:
+    hitbox_radius = 3
+
+    def __init__(self, pos: Vector2, speed: float = 2.0):
+        self.pos = pos
+        self.speed = speed
+
+    def move(self, direction: Vector2, obstacles: Iterable[Obstacle] = ()) -> None:
+        if direction.length() > 0:
+            direction.scale_to_length(self.speed)
+            new_pos = self.pos + direction
+            if not any(
+                line_segment_dist(o.start_pos, o.end_pos, new_pos) < self.hitbox_radius
+                for o in obstacles
+            ):
+                self.pos = new_pos
+
+
+class Player(Movable):
+    hitbox_radius = 10
+
+    def __init__(self, pos: Vector2) -> None:
+        super().__init__(pos, speed=1.75)
+        self.color = (255, 0, 0)
+        self.speed = 1.75
+
+    def render(self, screen: pygame.Surface) -> None:
+        pygame.draw.circle(screen, self.color, self.pos, 10, 5)
+
+
+class LightSource(Movable):
+    hitbox_radius = 5
     color = (255, 255, 100)
 
     def __init__(self, pos: Vector2) -> None:
-        self.pos = pos
+        super().__init__(pos, speed=1.0)
 
     def line_of_sight_polygon(self, obstacles: list[Obstacle]) -> list[Vector2]:
+        pos = Vector2(round(self.pos.x), round(self.pos.y))
         ends: list[Vector2] = []
         for obs in obstacles:
-            ends.append(obs.start_pos - self.pos)
-            ends.append(obs.end_pos - self.pos)
+            ends.append(obs.start_pos - pos)
+            ends.append(obs.end_pos - pos)
         ends.sort(key=lambda v: v.as_polar()[1])
         poly = []
         on_obstacle = None
@@ -212,7 +234,7 @@ class LightSource:
             # initial min_dist should be longer than any possible distance within the window
             min_dist = 4500 / ray.length()
             for line in obstacles:
-                t1t2 = intersect_ray_line(self.pos, ray, line.start_pos, line.end_pos)
+                t1t2 = intersect_ray_line(pos, ray, line.start_pos, line.end_pos)
                 if t1t2 is not None:
                     t1, t2 = t1t2
                     if t2 in (0, 1):
@@ -229,13 +251,13 @@ class LightSource:
                     closest_dist = t1
 
             if closest_obs_end is None:
-                poly.append(self.pos + ray * min_dist)
+                poly.append(pos + ray * min_dist)
             elif closest_obs_end is on_obstacle:
-                poly.append(self.pos + ray * closest_dist)
-                poly.append(self.pos + ray * min_dist)
+                poly.append(pos + ray * closest_dist)
+                poly.append(pos + ray * min_dist)
             else:
-                poly.append(self.pos + ray * min_dist)
-                poly.append(self.pos + ray * closest_dist)
+                poly.append(pos + ray * min_dist)
+                poly.append(pos + ray * closest_dist)
                 nearest_obs = closest_obs_end
 
             on_obstacle = nearest_obs
@@ -251,6 +273,22 @@ class LightSource:
         pygame.draw.circle(screen, self.color, self.pos, 5)
 
 
+class Goal:
+    bg_color = (0, 0, 0)
+    inactive_color = (0, 150, 150)
+    active_color = (0, 250, 150)
+
+    def __init__(self, top: int, left: int, width: int, height: int):
+        self.rect = pygame.Rect(top, left, width, height)
+        self.font = pygame.font.SysFont("Arial", 20)
+        self.activated = False
+
+    def render(self, screen: pygame.Surface) -> None:
+        color = self.active_color if self.activated else self.inactive_color
+        pygame.draw.rect(screen, self.bg_color, self.rect)
+        pygame.draw.rect(screen, color, self.rect, 5)
+
+
 class GameScene(Scene):
     def __init__(self) -> None:
         self.player = Player(Vector2(20, 500))
@@ -258,64 +296,52 @@ class GameScene(Scene):
             LightSource(Vector2(400, 100)),
         ]
         self.obstacles: list[Obstacle] = [
-            Obstacle(Vector2(10, 550), Vector2(600, 550)),
+            Obstacle(Vector2(1, 550), Vector2(601, 550)),
+            Obstacle(Vector2(600, 547), Vector2(620, 599)),
             Obstacle(Vector2(300, 200), Vector2(400, 400)),
             Obstacle(Vector2(500, 200), Vector2(600, 100)),
         ]
+        self.sides = get_sides(800, 600)
+        self.goals = [Goal(690, 540, 100, 50)]
 
     def render(self, screen: pygame.Surface) -> None:
-        screen.fill((0, 0, 0))
+        screen.fill((0, 20, 0))
         screen_width, screen_height = screen.get_size()
 
-        self.player.render(screen)
-
-        obstacles = self.obstacles + get_sides(screen_width, screen_height)
         for light in self.lights:
             lighting = pygame.Surface((screen_width, screen_height))
-            lighting.set_alpha(40)
-            light.render(screen)
-            poly = light.line_of_sight_polygon(obstacles)
+            lighting.set_alpha(20)
+            poly = light.line_of_sight_polygon(self.obstacles + self.sides)
             pygame.draw.polygon(lighting, (255, 255, 150), poly)
             screen.blit(lighting, (0, 0))
 
-        ends = [
-            Vector2(0, 0),
-            Vector2(screen_width, 0),
-            Vector2(0, screen_height),
-            Vector2(screen_width, screen_height),
-        ]
-
         for obstacle in self.obstacles:
             obstacle.render(screen)
-            ends.append(obstacle.start_pos)
-            ends.append(obstacle.end_pos)
 
-        for end in ends:
-            pygame.draw.line(screen, (0, 255, 255), light.pos, end)
+        for goal in self.goals:
+            goal.render(screen)
+
+        for light in self.lights:
+            light.render(screen)
+
+        self.player.render(screen)
 
     def update(self) -> None:
         keys = pygame.key.get_pressed()
-        movement = Vector2()
-        if keys[pygame.K_LEFT]:
-            movement.x -= 1
-        if keys[pygame.K_RIGHT]:
-            movement.x += 1
-        if keys[pygame.K_UP]:
-            movement.y -= 1
-        if keys[pygame.K_DOWN]:
-            movement.y += 1
-        if movement.length() > 0:
-            self.player.move(movement)
-        light_movement = Vector2()
-        if keys[pygame.K_a]:
-            light_movement.x -= 1
-        if keys[pygame.K_d]:
-            light_movement.x += 1
-        if keys[pygame.K_w]:
-            light_movement.y -= 1
-        if keys[pygame.K_s]:
-            light_movement.y += 1
-        self.lights[0].pos += light_movement
+        move = get_movement(
+            keys, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN
+        )
+        self.player.move(move, self.obstacles + self.sides)
+
+        light_move = get_movement(keys, pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s)
+        self.lights[0].move(light_move, self.obstacles + self.sides)
+
+        for goal in self.goals:
+            if goal.rect.collidepoint(self.player.pos):
+                goal.activated = True
+                if all(goal.activated for goal in self.goals):
+                    # TODO: level complete
+                    return
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
@@ -365,6 +391,43 @@ def get_sides(width: int, height: int) -> list[Obstacle]:
         Obstacle(topright, botright),
         Obstacle(botright, botleft),
     ]
+
+
+def get_movement(keys, left, right, up, down) -> Vector2:
+    movement = Vector2(0, 0)
+    if keys[left]:
+        movement.x -= 1
+    if keys[right]:
+        movement.x += 1
+    if keys[up]:
+        movement.y -= 1
+    if keys[down]:
+        movement.y += 1
+    return movement
+
+
+def lines_intersect(a: Vector2, b: Vector2, c: Vector2, d: Vector2) -> bool:
+    """
+    Return True if line segments a-b and c-d intersect
+    NOTE: does not work well with lines that are colinear
+    """
+
+    def ccw(a: Vector2, b: Vector2, c: Vector2) -> bool:
+        return (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x)
+
+    return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
+
+
+def line_segment_dist(a: Vector2, b: Vector2, p: Vector2) -> float:
+    """
+    Returns shortest distance from line segment a-b to point p
+    (don't ask me how it works i just found some equation online and it seemed to work)
+    """
+    a_to_b = b - a
+    norm = a_to_b.dot(a_to_b)
+    u = (p - a).dot(a_to_b) / norm
+    u = max(0, min(1, u))
+    return (a + a_to_b * u - p).length()
 
 
 def reset_cursor() -> None:
