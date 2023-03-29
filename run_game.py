@@ -15,6 +15,8 @@ class Game:
         self.scenes = {
             "mainmenu": MainMenu(),
             "game": GameScene(),
+            "level_complete": LevelCompleteScene(),
+            "game_over": GameOverScene(),
         }
         self.scene = self.scenes["game"]
         self.clock = pygame.time.Clock()
@@ -176,9 +178,7 @@ class Obstacle:
         self.end_pos = end_pos
 
     def render(self, screen: pygame.Surface) -> None:
-        pygame.draw.line(
-            screen, self.color, self.start_pos, self.end_pos, width=self.width
-        )
+        pygame.draw.line(screen, self.color, self.start_pos, self.end_pos, width=self.width)
 
 
 class Movable:
@@ -328,24 +328,79 @@ class GameScene(Scene):
 
     def update(self) -> None:
         keys = pygame.key.get_pressed()
-        move = get_movement(
-            keys, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN
-        )
+        move = get_movement(keys, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN)
         self.player.move(move, self.obstacles + self.sides)
 
         light_move = get_movement(keys, pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_s)
         self.lights[0].move(light_move, self.obstacles + self.sides)
 
+        if not any(
+            lines_intersect(self.player.pos, light.pos, obs.start_pos, obs.end_pos)
+            for obs in self.obstacles
+            for light in self.lights
+        ):
+            self.die()
+
         for goal in self.goals:
             if goal.rect.collidepoint(self.player.pos):
                 goal.activated = True
                 if all(goal.activated for goal in self.goals):
-                    # TODO: level complete
-                    return
+                    pygame.event.post(UserEvent.change_scene("level_complete"))
+
+    def die(self):
+        pygame.event.post(UserEvent.change_scene("game_over"))
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pygame.event.post(UserEvent.change_scene("mainmenu"))
+
+
+class LevelCompleteScene(Scene):
+    text_color = "green"
+
+    def __init__(self, text: str = "You win!"):
+        self.text = text
+
+    def render(self, screen: pygame.Surface) -> None:
+        screen.fill((0, 0, 0))
+        font = pygame.font.SysFont("Arial", 40)
+        antialiasing = True
+        text_surface = font.render(self.text, antialiasing, self.text_color)
+        left = (screen.get_width() - text_surface.get_width()) // 2
+        screen.blit(text_surface, (left, 200))
+
+    def update(self) -> None:
+        pass
+
+    def handle_events(self, events: list[pygame.event.Event]) -> None:
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pygame.event.post(UserEvent.new_game())
+                pygame.event.post(UserEvent.change_scene("mainmenu"))
+
+
+class GameOverScene(Scene):
+    text_color = "red"
+
+    def render(self, screen: pygame.Surface) -> None:
+        screen.fill((240, 240, 240))
+        font = pygame.font.SysFont("Arial", 40)
+        antialiasing = True
+        top = 200
+        for line in ("You died!", "Better stay in the shadows..."):
+            text_surface = font.render(line, antialiasing, self.text_color)
+            left = (screen.get_width() - text_surface.get_width()) // 2
+            screen.blit(text_surface, (left, top))
+            top += 100
+
+    def update(self) -> None:
+        pass
+
+    def handle_events(self, events: list[pygame.event.Event]) -> None:
+        for event in events:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                pygame.event.post(UserEvent.new_game())
                 pygame.event.post(UserEvent.change_scene("mainmenu"))
 
 
